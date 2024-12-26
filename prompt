@@ -1,0 +1,270 @@
+Okay so I have a project which I need to do regarding Big Data pipelines and analytics. The project must use any of the technologies from Apache Kafka, Apache Hadoop, Apache HBase, Apache Hive, MongoDB, Redis, Neo4j, Spark,  and any other technology you see fit for the use case. Keep in mind we don't want to over engineer and keep things to the point and achieve our goals. We must use Docker containers for each part of the application pipeline and any application code we write must also be dockerized (including any api's / microservices). We need to do Dashboarding via Python. We must also configure the applications to be able to run on multiple computers in the same network (in my case I have a PC which will be the primary thing I will be working on and a laptop which can be the secondary computer where do the horizontal scaling / use shared resources). Everything I have written uptil yet is the project requirements in my own wording. Now I am attaching context from the actual requirements document, you do your thinking and tell me the architecture and everything I need to know before I start. Keep in mind I dont have a dataset to work with or anything so tell me everything I need to know, you may use the web
+
+PROJECT CONTEXT:
+
+• All dashboards to be on Python
+• Real-time or batch-based flow of data and analytics to be demonstrated
+• Use Apache Airflow for workflow management
+• Everything to be dockerized
+• Needed: live demo on web (will be shown to the faculty)
+• Needed: GitHub page explaining the whole project, thought process, diagrams,
+limitations, assumptions, technology stack etc. (no report needed)
+• Bonus 1.5% marks for setting up application on more than one PC (only to the
+student who worked for it)
+• Technology Stack: Kafka, Nifi (batch-data ingestion), Spark/Flink (Analytics),
+Hadoop Ecosystem (storage, management, and querying), Redis, MongoDB, Neo4j
+(add or remove as needed)
+
+PROJECT IDEA:
+
+Analytics on real-time online ecommerce data
+Do research, create a problem statement, and the process to do BDA (put on paper- bring
+paper in demo)
+Create streaming big data related to ecommerce (3-4 GB)
+Ingest through Kafka
+Charge-up Hadoop and configure and store in HBase (may need hybrid database)
+Do EDA (basic statistical analysis) and present it on dashboard
+Analyze through Spark
+Present results on dashboard (select ML/BI usecase yourself, e.g., fraud detection,
+customer anlaysis, demand forecasting)
+Present statistics of ingestion and HBase queries on dashboard (i.e., admin dashboard).
+
+Currently we have the following architecture 
+
+              ┌────────────┐
+              │            │
+              │ Data Gen   │  (Python script generating e-commerce transactions)
+              │(Simulated) │
+              └─────┬──────┘
+                    │(JSON / CSV / Avro / etc.)
+                    ▼
+          ┌──────────────────┐
+   Real-  │      Kafka       │
+    time  │(Broker+Zookeeper)│
+          └──────────────────┘
+                    │
+                    │ (Streaming)
+                    ▼
+          ┌──────────────────┐
+          │   Spark/Flink    │--→ (Analytical Results)
+          │ (Streaming Jobs) │
+          └──────────────────┘
+                    │
+                    ├────────────────┐
+                    │                │
+                    ▼                ▼
+         (Batch)    ▼                ▼   (Optional Real-time writes)
+     ┌───────────────────┐      ┌─────────────────┐
+     │       NiFi        │      │   HBase/HDFS    │
+     │ (Batch Ingestion) │------│  (Data Storage) │
+     └───────────────────┘      └─────────────────┘
+                    │
+                    ▼
+               Airflow
+         (Workflow Orchestration)
+                    │
+                    ▼
+             ┌─────────────┐
+             │   Python    │ (Dash, Streamlit, Flask, etc.)
+             │ Dashboards  │
+             └─────────────┘
+
+
+and here is the current working docker-compose with all the containers running :
+services:
+  zookeeper:
+    image: zookeeper
+    container_name: zookeeper
+    environment:
+      ALLOW_ANONYMOUS_LOGIN: "yes"
+    ports:
+      - "2181:2181"
+    volumes:
+      - zookeeper-data:/data
+      - zookeeper-datalog:/datalog
+    networks:
+      - bda-network
+
+  kafka:
+    image: confluentinc/cp-kafka
+    container_name: kafka
+    hostname: kafka
+    environment:
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      # KAFKA_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    networks:
+      - bda-network
+
+  namenode:
+    image: bde2020/hadoop-namenode
+    container_name: namenode
+    hostname: namenode
+    volumes:
+      - namenode-data:/hadoop/dfs/name
+    environment:
+      - CLUSTER_NAME=test
+      - DFS_REPLICATION=1
+    ports:
+      - "8020:8020" 
+      - "6000:50070"  
+    networks:
+      - bda-network
+
+  datanode:
+    image: bde2020/hadoop-datanode
+    container_name: datanode
+    hostname: datanode
+    volumes:
+      - datanode-data:/hadoop/dfs/data
+    environment:
+      - CLUSTER_NAME=test
+      - CORE_CONF_fs_defaultFS=hdfs://namenode:8020
+    depends_on:
+      - namenode
+    ports:
+      - "5000:50075"  # DataNode Web UI
+    networks:
+      - bda-network
+
+  hbase-master:
+    image: harisekhon/hbase
+    container_name: hbase-master
+    hostname: hbase-master
+    environment:
+      - HBASE_MASTER=true
+      - HADOOP_CONF_DIR=/etc/hadoop
+    depends_on:
+      - namenode
+    ports:
+      - "16010:16010"
+      - "9090:9090"
+    networks:
+      - bda-network
+
+  hbase-regionserver:
+    image: harisekhon/hbase
+    container_name: hbase-regionserver
+    hostname: hbase-regionserver
+    environment:
+      - HADOOP_CONF_DIR=/etc/hadoop
+    depends_on:
+      - hbase-master
+    networks:
+      - bda-network
+
+  spark-master:
+    image: bitnami/spark:latest
+    container_name: spark-master
+    environment:
+      - SPARK_MODE=master
+    ports:
+      - "7077:7077" 
+      - "8080:8080"  
+    networks:
+      - bda-network
+    user: root
+
+  spark-worker:
+    image: bitnami/spark:latest
+    container_name: spark-worker
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark-master:7077
+    depends_on:
+      - spark-master
+    ports:
+      - "8081:8081"  # Spark worker UI
+    networks:
+      - bda-network
+    user: root
+
+  x-airflow-common:
+    &airflow-common
+    image: apache/airflow:2.0.0
+    environment:
+      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+      - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgresql+psycopg2://postgres:postgres@postgres:5432/airflow
+      - AIRFLOW__CORE__FERNET_KEY=FB0o_zt4e3Ziq3LdUUO7F2Z95cvFFx16hU8jTeR1ASM=
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False
+      - AIRFLOW__CORE__LOGGING_LEVEL=INFO
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./airflow-data/logs:/opt/airflow/logs
+      - ./airflow-data/plugins:/opt/airflow/plugins
+      - ./airflow-data/airflow.cfg:/opt/airlfow/airflow.cfg
+    depends_on:
+      - postgres
+    networks:
+      - bda-network
+  
+  postgres:
+    image: postgres:12
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=airflow
+      - POSTGRES_PORT=5432
+    ports:
+      - "5432:5432"
+    networks:
+      - bda-network
+  
+  airflow-init:
+    << : *airflow-common
+    container_name: airflow_init
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - airflow users list || ( airflow db init &&
+        airflow users create
+          --role Admin
+          --username airflow
+          --password airflow
+          --email airflow@airflow.com
+          --firstname airflow
+          --lastname airflow )
+    restart: on-failure
+    networks:
+      - bda-network
+
+  airflow-webserver:
+    << : *airflow-common
+    command: airflow webserver
+    ports:
+      - 8082:8080
+    container_name: airflow_webserver
+    restart: always
+    networks:
+      - bda-network
+
+  airflow-scheduler:
+    << : *airflow-common
+    command: airflow scheduler
+    container_name: airflow_scheduler
+    restart: always
+    networks:
+      - bda-network
+
+volumes:
+  namenode-data:
+  datanode-data:
+  zookeeper-data:
+  kafka-data:
+  zookeeper-datalog:
+
+networks:
+  bda-network:
+    driver: bridge
+
+
+Now what I want to do is make it so that the data is generated and simulated like it is live instead of simulating a csv file transfer. I am providing my current data generation script which is in python which runs on all cores of my cpu. Right now the data is generated for fraud protection. First thing I want you to do is change it so that it has a different ML use case instead of fraud detection. Then tell me how to deploy and do rest of the stuff along with my directory management. Also tell me if I need nifi for batch ingestaion and how to create the two pipelines for them.
